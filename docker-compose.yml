@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: earnings-db
+    environment:
+      - POSTGRES_USER=${PGUSER}
+      - POSTGRES_PASSWORD=${PGPASS}
+      - POSTGRES_DB=earnings
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    container_name: redis-cache
+    ports:
+      - "6379:6379"
+  
+  superset:
+    image: apache/superset:latest-dev
+    container_name: superset-app
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - SUPERSET_CONFIG_PATH=/app/pythonpath/superset_config.py
+      - MAPBOX_API_KEY=${MAPBOX_KEY}
+      - SECRET_KEY=${SECRET_KEY}   # ensure you've set a strong key in .env
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py
+    ports:
+      - "8088:8088"
+    command: >
+      /bin/bash -c "
+        superset db upgrade &&
+        superset fab create-admin --username ${ADMIN_USER} --firstname Superset --lastname Admin --email admin@example.com --password ${ADMIN_PASS} &&
+        superset init &&
+        gunicorn -w 5 -k gthread -t 300 --bind 0.0.0.0:8088 'superset.app:create_app()'
+      "
+
+
+  etl:
+    build:
+      context: ./etl
+      dockerfile: Dockerfile
+    container_name: etl-worker
+    depends_on:
+      - postgres
+    environment:
+      - PGHOST=postgres
+      - PGUSER=${PGUSER}
+      - PGPASSWORD=${PGPASS}
+      - PGDATABASE=earnings
+      - FMP_KEY=${FMP_KEY}
+      - EMAIL=${UA_EMAIL}
+      - COMPANY=${UA_COMPANY}
+    volumes:
+      - ./etl:/code
+    command: python filings_ingest.py --live
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:
